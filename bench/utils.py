@@ -3,7 +3,7 @@ from distutils.spawn import find_executable
 import bench
 import semantic_version
 from bench import env
-from six import iteritems
+from six import iteritems, PY2
 
 
 class PatchError(Exception):
@@ -37,8 +37,8 @@ def init(path, apps_path=None, no_procfile=False, no_backups=False,
 		no_auto_update=False, frappe_path=None, frappe_branch=None, wheel_cache_dir=None,
 		verbose=False, clone_from=None, skip_redis_config_generation=False,
 		clone_without_update=False,
-		ignore_exist = False,
-		python		 = 'python'): # Let's change when we're ready. - <achilles@frappe.io>
+		ignore_exist = False, skip_assets=False,
+		python		 = 'python3'): # Let's change when we're ready. - <achilles@frappe.io>
 	from .app import get_app, install_apps_from_path
 	from .config.common_site_config import make_config
 	from .config import redis
@@ -72,7 +72,7 @@ def init(path, apps_path=None, no_procfile=False, no_backups=False,
 		if not frappe_path:
 			frappe_path = 'https://github.com/ovenube/frappe.git'
 
-		get_app(frappe_path, branch=frappe_branch, bench_path=path, build_asset_files=False, verbose=verbose)
+		get_app(frappe_path, branch=frappe_branch, bench_path=path, skip_assets=True, verbose=verbose)
 
 		if apps_path:
 			install_apps_from_path(apps_path, bench_path=path)
@@ -80,10 +80,12 @@ def init(path, apps_path=None, no_procfile=False, no_backups=False,
 
 	bench.set_frappe_version(bench_path=path)
 	if bench.FRAPPE_VERSION > 5:
-		update_node_packages(bench_path=path)
+		if not skip_assets:
+			update_node_packages(bench_path=path)
 
 	set_all_patches_executed(bench_path=path)
-	build_assets(bench_path=path)
+	if not skip_assets:
+		build_assets(bench_path=path)
 
 	if not skip_redis_config_generation:
 		redis.generate_config(path)
@@ -169,7 +171,7 @@ def which(executable, raise_err = False):
 
 	return exec_
 
-def setup_env(bench_path='.', python = 'python'):
+def setup_env(bench_path='.', python = 'python3'):
 	python = which(python, raise_err = True)
 	pip    = os.path.join('env', 'bin', 'pip')
 
@@ -241,7 +243,7 @@ def add_to_crontab(line):
 	line = str.encode(line)
 	if not line in current_crontab:
 		cmd = ["crontab"]
-		if platform.system() == 'FreeBSD':
+		if platform.system() == 'FreeBSD' or platform.linux_distribution()[0]=="arch":
 			cmd = ["crontab", "-"]
 		s = subprocess.Popen(cmd, stdin=subprocess.PIPE)
 		s.stdin.write(current_crontab)
@@ -315,7 +317,7 @@ def get_program(programs):
 def get_process_manager():
 	return get_program(['foreman', 'forego', 'honcho'])
 
-def start(no_dev=False, concurrency=None):
+def start(no_dev=False, concurrency=None, procfile=None):
 	program = get_process_manager()
 	if not program:
 		raise Exception("No process manager found")
@@ -326,6 +328,9 @@ def start(no_dev=False, concurrency=None):
 	command = [program, 'start']
 	if concurrency:
 		command.extend(['-c', concurrency])
+
+	if procfile:
+		command.extend(['-f', procfile])
 
 	os.execv(program, command)
 
@@ -349,16 +354,16 @@ def check_git_for_shallow_clone():
 	from .config.common_site_config import get_config
 	config = get_config('.')
 
-	if config.get('release_bench'):
-		return False
+	if config:
+		if config.get('release_bench'):
+			return False
 
-	if not config.get('shallow_clone'):
-		return False
+		if not config.get('shallow_clone'):
+			return False
 
 	git_version = get_git_version()
 	if git_version > 1.9:
 		return True
-	return False
 
 def get_cmd_output(cmd, cwd='.'):
 	try:
@@ -409,7 +414,6 @@ def restart_supervisor_processes(bench_path='.', web_workers=False):
 
 def restart_systemd_processes(bench_path='.', web_workers=False):
 	from .config.common_site_config import get_config
-	conf = get_config(bench_path=bench_path)
 	bench_name = get_bench_name(bench_path)
 	exec_cmd('sudo systemctl stop -- $(systemctl show -p Requires {bench_name}.target | cut -d= -f2)'.format(bench_name=bench_name))
 	exec_cmd('sudo systemctl start -- $(systemctl show -p Requires {bench_name}.target | cut -d= -f2)'.format(bench_name=bench_name))
@@ -422,15 +426,15 @@ def set_default_site(site, bench_path='.'):
 
 def update_requirements(bench_path='.'):
 	print('Updating Python libraries...')
-	pip = os.path.join(bench_path, 'env', 'bin', 'pip')
 
-	exec_cmd("{pip} install --upgrade pip".format(pip=pip))
+	# update env pip
+	env_pip = os.path.join(bench_path, 'env', 'bin', 'pip')
+	exec_cmd("{pip} install -q -U pip".format(pip=env_pip))
 
-	apps_dir = os.path.join(bench_path, 'apps')
-
-	# Update bench requirements
+	# Update bench requirements (at user level)
 	bench_req_file = os.path.join(os.path.dirname(bench.__path__[0]), 'requirements.txt')
-	install_requirements(pip, bench_req_file)
+	user_pip = which("pip" if PY2 else "pip3")
+	install_requirements(user_pip, bench_req_file, user=True)
 
 	from bench.app import get_apps, install_app
 
@@ -497,9 +501,14 @@ def update_npm_packages(bench_path='.'):
 	exec_cmd('npm install', cwd=bench_path)
 
 
-def install_requirements(pip, req_file):
+def install_requirements(pip, req_file, user=False):
 	if os.path.exists(req_file):
-		exec_cmd("{pip} install -q -r {req_file}".format(pip=pip, req_file=req_file))
+		# sys.real_prefix exists only in a virtualenv
+		if hasattr(sys, 'real_prefix'):
+			user = False
+
+		user_flag = "--user" if user else ""
+		exec_cmd("{pip} install {user_flag} -q -U -r {req_file}".format(pip=pip, user_flag=user_flag, req_file=req_file))
 
 def backup_site(site, bench_path='.'):
 	bench.set_frappe_version(bench_path=bench_path)
@@ -522,6 +531,15 @@ def is_root():
 def set_mariadb_host(host, bench_path='.'):
 	update_common_site_config({'db_host': host}, bench_path=bench_path)
 
+def set_redis_cache_host(host, bench_path='.'):
+	update_common_site_config({'redis_cache': "redis://{}".format(host)}, bench_path=bench_path)
+
+def set_redis_queue_host(host, bench_path='.'):
+	update_common_site_config({'redis_queue': "redis://{}".format(host)}, bench_path=bench_path)
+
+def set_redis_socketio_host(host, bench_path='.'):
+	update_common_site_config({'redis_socketio': "redis://{}".format(host)}, bench_path=bench_path)
+
 def update_common_site_config(ddict, bench_path='.'):
 	update_json_file(os.path.join(bench_path, 'sites', 'common_site_config.json'), ddict)
 
@@ -535,7 +553,7 @@ def update_json_file(filename, ddict):
 
 	content.update(ddict)
 	with open(filename, 'w') as f:
-		content = json.dump(content, f, indent=1, sort_keys=True)
+		json.dump(content, f, indent=1, sort_keys=True)
 
 def drop_privileges(uid_name='nobody', gid_name='nogroup'):
 	# from http://stackoverflow.com/a/2699996
@@ -709,12 +727,6 @@ def update_translations(app, lang):
 
 	print('downloaded for', app, lang)
 
-def download_chart_of_accounts():
-	charts_dir = os.path.join('apps', "erpnext", "erpnext", 'accounts', 'chart_of_accounts', "submitted")
-	csv_file = os.path.join(translations_dir, lang + '.csv')
-	url = "https://translate.erpnext.com/files/{}-{}.csv".format(app, lang)
-	r = requests.get(url, stream=True)
-	r.raise_for_status()
 
 def print_output(p):
 	while p.poll() is None:
@@ -812,7 +824,7 @@ def run_playbook(playbook_name, extra_vars=None, tag=None):
 	if not find_executable('ansible'):
 		print("Ansible is needed to run this command, please install it using 'pip install ansible'")
 		sys.exit(1)
-	args = ['ansible-playbook', '-c', 'local', playbook_name]
+	args = ['ansible-playbook', '-c', 'local', playbook_name, '-vvvv']
 
 	if extra_vars:
 		args.extend(['-e', json.dumps(extra_vars)])

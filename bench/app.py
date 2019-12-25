@@ -1,3 +1,4 @@
+from __future__ import print_function
 import os
 from .utils import (exec_cmd, get_frappe, check_git_for_shallow_clone, build_assets,
 	restart_supervisor_processes, get_cmd_output, run_frappe_cmd, CommandFailedError,
@@ -91,7 +92,7 @@ def remove_from_excluded_apps_txt(app, bench_path='.'):
 		apps.remove(app)
 		return write_excluded_apps_txt(apps, bench_path=bench_path)
 
-def get_app(git_url, branch=None, bench_path='.', build_asset_files=True, verbose=False,
+def get_app(git_url, branch=None, bench_path='.', skip_assets=False, verbose=False,
 	postprocess = True):
 	# from bench.utils import check_url
 	try:
@@ -136,7 +137,7 @@ def get_app(git_url, branch=None, bench_path='.', build_asset_files=True, verbos
 
 	if postprocess:
 
-		if build_asset_files:
+		if not skip_assets:
 			build_assets(bench_path=bench_path, app=app_name)
 		conf = get_config(bench_path=bench_path)
 
@@ -159,16 +160,15 @@ def new_app(app, bench_path='.'):
 		run_frappe_cmd('make-app', apps, app, bench_path=bench_path)
 	install_app(app, bench_path=bench_path)
 
-def install_app(app, bench_path='.', verbose=False, no_cache=False):
-	logger.info('installing {}'.format(app))
-	# find_links = '--find-links={}'.format(conf.get('wheel_cache_dir')) if conf.get('wheel_cache_dir') else ''
-	find_links = ''
-	exec_cmd("{pip} install {quiet} {find_links} -e {app} {no_cache}".format(
-				pip=os.path.join(bench_path, 'env', 'bin', 'pip'),
-				quiet="-q" if not verbose else "",
-				no_cache='--no-cache-dir' if no_cache else '',
-				app=os.path.join(bench_path, 'apps', app),
-				find_links=find_links))
+def install_app(app, bench_path=".", verbose=False, no_cache=False):
+	logger.info("installing {}".format(app))
+
+	pip_path = os.path.join(bench_path, "env", "bin", "pip")
+	quiet_flag = "-q" if not verbose else ""
+	app_path = os.path.join(bench_path, "apps", app)
+	cache_flag = "--no-cache-dir" if no_cache else ""
+
+	exec_cmd("{pip} install {quiet} -U -e {app} {no_cache}".format(pip=pip_path, quiet=quiet_flag, app=app_path, no_cache=cache_flag))
 	add_to_appstxt(app, bench_path=bench_path)
 
 def remove_app(app, bench_path='.'):
@@ -412,12 +412,22 @@ def get_major_version(version):
 def install_apps_from_path(path, bench_path='.'):
 	apps = get_apps_json(path)
 	for app in apps:
-		get_app(app['url'], branch=app.get('branch'), bench_path=bench_path, build_asset_files=False)
+		get_app(app['url'], branch=app.get('branch'), bench_path=bench_path, skip_assets=True)
 
 def get_apps_json(path):
 	if path.startswith('http'):
 		r = requests.get(path)
 		return r.json()
-	else:
-		with open(path) as f:
-			return json.load(f)
+
+	with open(path) as f:
+		return json.load(f)
+
+def validate_branch():
+	for app in ['frappe', 'erpnext']:
+		branch = get_current_branch(app)
+
+		if branch == "master":
+			print(''' master branch is renamed to version-11 and develop to version-12. Please switch to new branches to get future updates.
+
+To switch to version 11, run the following commands: bench switch-to-branch version-11''')
+			sys.exit(1)

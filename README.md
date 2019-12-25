@@ -34,16 +34,17 @@ To install the Frappe/ERPNext server software, you will need an operating system
 To manually install frappe/erpnext, you can follow this [this wiki](https://github.com/frappe/frappe/wiki/The-Hitchhiker%27s-Guide-to-Installing-Frappe-on-Linux) for Linux and [this wiki](https://github.com/frappe/frappe/wiki/The-Hitchhiker's-Guide-to-Installing-Frappe-on-Mac-OS-X) for MacOS. It gives an excellent explanation about the stack. You can also follow the steps mentioned below:
 
 #### 1. Install Pre-requisites
-
-- Python 2.7 [Python3.5+ also supported, but not recommended for production]
-- MariaDB 10+
-- Nginx (for production)
-- Nodejs
-- yarn
-- Redis
-- cron (crontab is required)
-- wkhtmltopdf (version 0.12.5) (for pdf generation)
-
+<pre>
+• Python 3.6+
+• Node.js 12
+• Redis 5					(caching and realtime updates)
+• MariaDB 10.3 / Postgres 9.5			(to run database driven apps)
+• yarn 1.12+					(js dependency manager)
+• pip 15+					(py dependency manager)
+• cron 						(scheduled jobs)
+• wkhtmltopdf (version 0.12.5 with patched qt) 	(for pdf generation)
+• Nginx 					(for production)						
+</pre>
 #### 2. Install Bench
 
 Install bench as a *non root* user,
@@ -123,16 +124,10 @@ If you are on a fresh server and logged in as root, at first create a dedicated 
 
 ```
   adduser [frappe-user]
-  usermod -aG sudo frappe
+  usermod -aG sudo [frappe-user]
 ```
 
-_(it is very common to name this user `frappe`, but this comes with the disadvantage of being 
-ranked very high in hackers circles for attempts to entering servers. So production sites it
-is highly recommended to use a custom username harder to guess for)_
-
-use --user flag to create a user and install using that user
-
-	python install.py --develop --user [frappe-user]
+*(it is very common to use "frappe" as frappe-username, but this comes with the security flaw of ["frappe" ranking very high](https://www.reddit.com/r/dataisbeautiful/comments/b3sirt/i_deployed_over_a_dozen_cyber_honeypots_all_over/?st=JTJ0SC0Q&sh=76e05240) in as a username challenged in hacking attempts. So, for production sites it is highly recommended to use a custom username harder to guess)*
 
 For developer setup:
 
@@ -141,6 +136,22 @@ For developer setup:
 For production:
 
 	sudo python install.py --production --user [frappe-user]
+
+use --user flag to create a user and install using that user (By default, the script will create a user with the username `frappe` if the --user flag is not used)
+
+	python install.py --develop --user [frappe-user]
+
+use --container flag to install inside a container (this will prevent the `/proc/sys/vm/swappiness: Read-only` file system error)
+
+	sudo python install.py --production --user [frappe-user] --container
+
+use --version flag to install specific version
+
+	python install.py --develop --version 11 --user [frappe-user]
+
+use --python flag to specify virtual environments python version, by default script setup python 3
+
+	python install.py --develop --version 11 --python python2.7 --user [frappe-user]
 
 #### What will this script do?
 
